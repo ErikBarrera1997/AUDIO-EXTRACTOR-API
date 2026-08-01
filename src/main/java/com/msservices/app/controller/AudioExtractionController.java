@@ -2,6 +2,7 @@ package com.msservices.app.controller;
 
 import com.msservices.app.dto.AudioExtractionRequest;
 import com.msservices.app.dto.AudioExtractionResponse;
+import com.msservices.app.dto.AudioSearchResponse;
 import com.msservices.app.service.AudioExtractionService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -17,6 +18,11 @@ public class AudioExtractionController {
 
     public AudioExtractionController(AudioExtractionService audioExtractionService) {
         this.audioExtractionService = audioExtractionService;
+    }
+
+    @PostMapping("/search")
+    public ResponseEntity<AudioSearchResponse> searchVideos(@RequestBody AudioExtractionRequest request) {
+        return ResponseEntity.ok(audioExtractionService.searchVideos(request.getVideoName()));
     }
 
     @PostMapping("/extract")

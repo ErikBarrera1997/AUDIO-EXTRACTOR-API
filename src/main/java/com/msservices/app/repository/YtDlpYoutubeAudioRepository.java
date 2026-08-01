@@ -1,30 +1,78 @@
 package com.msservices.app.repository;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.msservices.app.dto.AudioSearchResultDto;
 import com.msservices.app.dto.ExtractedAudioDto;
 import com.msservices.app.exception.AudioExtractionException;
+import com.msservices.app.exception.InvalidVideoSearchException;
 import com.msservices.app.exception.YoutubeToolUnavailableException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 import org.springframework.stereotype.Repository;
 
 @Repository
 public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
 
+    private static final int SEARCH_LIMIT = 15;
     private static final Duration EXTRACTION_TIMEOUT = Duration.ofMinutes(3);
+    private static final Duration SEARCH_TIMEOUT = Duration.ofMinutes(1);
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     @Override
-    public ExtractedAudioDto extractAudioByVideoName(String videoName) {
+    public List<AudioSearchResultDto> searchVideos(String videoName) {
+        List<String> command = List.of(
+                "yt-dlp",
+                "--flat-playlist",
+                "-J",
+                "ytsearch" + SEARCH_LIMIT + ":" + videoName
+        );
+
+        try {
+            Process process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .start();
+
+            CompletableFuture<String> outputFuture = CompletableFuture.supplyAsync(() -> readProcessOutput(process));
+            boolean finished = process.waitFor(SEARCH_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+
+            if (!finished) {
+                process.destroyForcibly();
+                throw new AudioExtractionException("La busqueda esta tardando demasiado. Intenta nuevamente.");
+            }
+
+            String commandOutput = outputFuture.join();
+
+            if (process.exitValue() != 0) {
+                throw new AudioExtractionException("No pudimos realizar la busqueda. Intenta nuevamente.");
+            }
+
+            return rankBestResults(parseSearchResults(commandOutput));
+        } catch (IOException exception) {
+            throw new YoutubeToolUnavailableException("El servicio de extraccion no esta disponible. Verifica que yt-dlp y ffmpeg esten instalados.", exception);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new AudioExtractionException("La busqueda fue interrumpida. Intenta nuevamente.", exception);
+        }
+    }
+
+    @Override
+    public ExtractedAudioDto extractAudioByVideoName(String videoName, String videoId) {
         Path workDirectory = createWorkDirectory();
 
         try {
-            Process process = startExtractionProcess(videoName, workDirectory);
+            Process process = startExtractionProcess(videoName, videoId, workDirectory);
             CompletableFuture<String> commandOutputFuture = CompletableFuture.supplyAsync(() -> readProcessOutput(process));
             boolean finished = process.waitFor(EXTRACTION_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
@@ -59,10 +107,78 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
         }
     }
 
-    private Process startExtractionProcess(String videoName, Path workDirectory) throws IOException {
+    private List<AudioSearchResultDto> parseSearchResults(String commandOutput) {
+        try {
+            List<AudioSearchResultDto> results = new ArrayList<>();
+            JsonNode root = OBJECT_MAPPER.readTree(commandOutput);
+            JsonNode entries = root.path("entries");
+
+            for (JsonNode entry : entries) {
+                String videoId = entry.path("id").asText(null);
+                String title = entry.path("title").asText(null);
+                if (videoId == null || videoId.isBlank() || title == null || title.isBlank()) {
+                    continue;
+                }
+
+                String author = readAuthor(entry);
+                Long duration = entry.path("duration").isNumber() ? entry.path("duration").asLong() : null;
+                Long viewCount = entry.path("view_count").isNumber() ? entry.path("view_count").asLong() : null;
+
+                results.add(new AudioSearchResultDto(videoId, title, author, duration, viewCount));
+            }
+
+            if (results.isEmpty()) {
+                throw new InvalidVideoSearchException("No encontramos videos con ese nombre. Intenta con una busqueda mas especifica.");
+            }
+
+            return results;
+        } catch (IOException exception) {
+            throw new AudioExtractionException("No pudimos interpretar los resultados de la busqueda. Intenta nuevamente.", exception);
+        }
+    }
+
+    private String readAuthor(JsonNode entry) {
+        String channel = entry.path("channel").asText("");
+        if (!channel.isBlank()) {
+            return channel;
+        }
+        String uploader = entry.path("uploader").asText("");
+        if (!uploader.isBlank()) {
+            return uploader;
+        }
+        return "Desconocido";
+    }
+
+    private List<AudioSearchResultDto> rankBestResults(List<AudioSearchResultDto> results) {
+        Map<String, AudioSearchResultDto> bestByAuthor = new LinkedHashMap<>();
+
+        for (AudioSearchResultDto result : results) {
+            String authorKey = result.getAuthor().toLowerCase();
+            AudioSearchResultDto existing = bestByAuthor.get(authorKey);
+            if (existing == null || qualityScore(result) > qualityScore(existing)) {
+                bestByAuthor.put(authorKey, result);
+            }
+        }
+
+        return bestByAuthor.values().stream()
+                .sorted(Comparator.comparingLong(this::qualityScore).reversed())
+                .collect(Collectors.toList());
+    }
+
+    private long qualityScore(AudioSearchResultDto result) {
+        long views = result.getViewCount() != null ? result.getViewCount() : 0L;
+        long duration = result.getDurationSeconds() != null ? result.getDurationSeconds() : 0L;
+        return views + (duration * 1000L);
+    }
+
+    private Process startExtractionProcess(String videoName, String videoId, Path workDirectory) throws IOException {
+        String target = (videoId != null && !videoId.isBlank())
+                ? "https://www.youtube.com/watch?v=" + videoId
+                : "ytsearch1:" + videoName;
+
         List<String> command = List.of(
                 "yt-dlp",
-                "ytsearch1:" + videoName,
+                target,
                 "--extract-audio",
                 "--audio-format",
                 "mp3",
@@ -70,6 +186,7 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
                 "0",
                 "--print",
                 "title",
+                "--no-simulate",
                 "--no-playlist",
                 "--output",
                 workDirectory.resolve("%(id)s.%(ext)s").toString()
