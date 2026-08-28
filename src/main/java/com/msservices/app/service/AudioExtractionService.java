@@ -37,17 +37,17 @@ public class AudioExtractionService {
 
     private String validateAndNormalizeVideoName(String rawVideoName) {
         if (rawVideoName == null || rawVideoName.trim().isEmpty()) {
-            throw new InvalidVideoSearchException("Ingresa el nombre de un video para buscar en YouTube.");
+            throw new InvalidVideoSearchException("Enter the name of a video to search on YouTube.");
         }
 
         String videoName = rawVideoName.trim();
 
         if (videoName.length() < 3) {
-            throw new InvalidVideoSearchException("La busqueda es demasiado corta. Escribe al menos 3 caracteres.");
+            throw new InvalidVideoSearchException("The search is too short. Enter at least 3 characters.");
         }
 
         if (videoName.length() > 150) {
-            throw new InvalidVideoSearchException("La busqueda es demasiado larga. Intenta con un nombre mas corto.");
+            throw new InvalidVideoSearchException("The search is too long. Try a shorter name.");
         }
 
         return videoName;

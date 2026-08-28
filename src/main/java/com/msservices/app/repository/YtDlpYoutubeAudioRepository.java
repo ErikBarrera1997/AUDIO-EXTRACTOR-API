@@ -49,21 +49,21 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
 
             if (!finished) {
                 process.destroyForcibly();
-                throw new AudioExtractionException("La busqueda esta tardando demasiado. Intenta nuevamente.");
+                throw new AudioExtractionException("The search is taking too long. Try again.");
             }
 
             String commandOutput = outputFuture.join();
 
             if (process.exitValue() != 0) {
-                throw new AudioExtractionException("No pudimos realizar la busqueda. Intenta nuevamente.");
+                throw new AudioExtractionException("We could not perform the search. Try again.");
             }
 
             return rankBestResults(parseSearchResults(commandOutput));
         } catch (IOException exception) {
-            throw new YoutubeToolUnavailableException("El servicio de extraccion no esta disponible. Verifica que yt-dlp y ffmpeg esten instalados.", exception);
+            throw new YoutubeToolUnavailableException("The extraction service is unavailable. Check that yt-dlp and ffmpeg are installed.", exception);
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new AudioExtractionException("La busqueda fue interrumpida. Intenta nuevamente.", exception);
+            throw new AudioExtractionException("The search was interrupted. Try again.", exception);
         }
     }
 
@@ -78,7 +78,7 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
 
             if (!finished) {
                 process.destroyForcibly();
-                throw new AudioExtractionException("La extraccion esta tardando demasiado. Intenta con otro video o vuelve a intentarlo mas tarde.");
+                throw new AudioExtractionException("The extraction is taking too long. Try another video or try again later.");
             }
 
             String commandOutput = commandOutputFuture.join();
@@ -99,9 +99,9 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
             );
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
-            throw new AudioExtractionException("La extraccion fue interrumpida. Intenta nuevamente.", exception);
+            throw new AudioExtractionException("The extraction was interrupted. Try again.", exception);
         } catch (IOException exception) {
-            throw new YoutubeToolUnavailableException("El servicio de extraccion no esta disponible. Verifica que yt-dlp y ffmpeg esten instalados.", exception);
+            throw new YoutubeToolUnavailableException("The extraction service is unavailable. Check that yt-dlp and ffmpeg are installed.", exception);
         } finally {
             deleteDirectory(workDirectory);
         }
@@ -128,12 +128,12 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
             }
 
             if (results.isEmpty()) {
-                throw new InvalidVideoSearchException("No encontramos videos con ese nombre. Intenta con una busqueda mas especifica.");
+                throw new InvalidVideoSearchException("We could not find videos with that name. Try a more specific search.");
             }
 
             return results;
         } catch (IOException exception) {
-            throw new AudioExtractionException("No pudimos interpretar los resultados de la busqueda. Intenta nuevamente.", exception);
+            throw new AudioExtractionException("We could not interpret the search results. Try again.", exception);
         }
     }
 
@@ -209,7 +209,7 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
         try {
             return Files.createTempDirectory("youtube-audio-");
         } catch (IOException exception) {
-            throw new AudioExtractionException("No pudimos preparar la extraccion del audio. Intenta nuevamente.", exception);
+            throw new AudioExtractionException("We could not prepare the audio extraction. Try again.", exception);
         }
     }
 
@@ -219,7 +219,7 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
                     .filter(Files::isRegularFile)
                     .filter(file -> file.getFileName().toString().toLowerCase().endsWith(".mp3"))
                     .findFirst()
-                    .orElseThrow(() -> new AudioExtractionException("No encontramos un audio disponible para ese video."));
+                    .orElseThrow(() -> new AudioExtractionException("We could not find an audio available for that video."));
         }
     }
 
@@ -244,22 +244,22 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
         String normalizedError = commandError == null ? "" : commandError.toLowerCase();
 
         if (normalizedError.contains("ffmpeg")) {
-            return "No pudimos convertir el audio. Verifica que ffmpeg este instalado en el servidor.";
+            return "We could not convert the audio. Check that ffmpeg is installed on the server.";
         }
 
         if (normalizedError.contains("unsupported url") || normalizedError.contains("unable to download webpage")) {
-            return "No pudimos acceder a YouTube en este momento. Intenta nuevamente mas tarde.";
+            return "We could not access YouTube right now. Try again later.";
         }
 
         if (normalizedError.contains("private video") || normalizedError.contains("sign in")) {
-            return "El video no esta disponible publicamente. Intenta con otro resultado.";
+            return "The video is not publicly available. Try another result.";
         }
 
         if (normalizedError.contains("no video results")) {
-            return "No encontramos videos con ese nombre. Intenta con una busqueda mas especifica.";
+            return "We could not find videos with that name. Try a more specific search.";
         }
 
-        return "No pudimos extraer el audio del video seleccionado. Intenta con otro video.";
+        return "We could not extract the audio from the selected video. Try another video.";
     }
 
     private void deleteDirectory(Path directory) {

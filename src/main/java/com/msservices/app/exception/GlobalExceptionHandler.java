@@ -34,6 +34,6 @@ public class GlobalExceptionHandler {
     public ResponseEntity<AudioExtractionResponse> handleUnexpected(Exception exception) {
         return ResponseEntity
                 .internalServerError()
-                .body(AudioExtractionResponse.failure("No pudimos procesar tu solicitud en este momento. Intenta nuevamente mas tarde."));
+                .body(AudioExtractionResponse.failure("We could not process your request right now. Try again later."));
     }
 }
