@@ -41,10 +41,11 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
 
         try {
             Process process = new ProcessBuilder(command)
-                    .redirectErrorStream(true)
+                    .redirectErrorStream(false)
                     .start();
 
             CompletableFuture<String> outputFuture = CompletableFuture.supplyAsync(() -> readProcessOutput(process));
+            CompletableFuture<String> errorFuture = CompletableFuture.supplyAsync(() -> readProcessError(process));
             boolean finished = process.waitFor(SEARCH_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
             if (!finished) {
@@ -53,9 +54,10 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
             }
 
             String commandOutput = outputFuture.join();
+            String commandError = errorFuture.join();
 
             if (process.exitValue() != 0) {
-                throw new AudioExtractionException("We could not perform the search. Try again.");
+                throw new AudioExtractionException(resolveFriendlyError(commandError, "We could not perform the search. Try again."));
             }
 
             return rankBestResults(parseSearchResults(commandOutput));
@@ -74,6 +76,7 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
         try {
             Process process = startExtractionProcess(videoName, videoId, workDirectory);
             CompletableFuture<String> commandOutputFuture = CompletableFuture.supplyAsync(() -> readProcessOutput(process));
+            CompletableFuture<String> commandErrorFuture = CompletableFuture.supplyAsync(() -> readProcessError(process));
             boolean finished = process.waitFor(EXTRACTION_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
 
             if (!finished) {
@@ -82,9 +85,10 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
             }
 
             String commandOutput = commandOutputFuture.join();
+            String commandError = commandErrorFuture.join();
 
             if (process.exitValue() != 0) {
-                throw new AudioExtractionException(resolveFriendlyError(commandOutput));
+                throw new AudioExtractionException(resolveFriendlyError(commandError, "We could not extract the audio from the selected video. Try another video."));
             }
 
             Path audioFile = findAudioFile(workDirectory);
@@ -188,18 +192,28 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
                 "title",
                 "--no-simulate",
                 "--no-playlist",
+                "--extractor-args",
+                "youtube:player_client=android",
                 "--output",
                 workDirectory.resolve("%(id)s.%(ext)s").toString()
         );
 
         return new ProcessBuilder(command)
-                .redirectErrorStream(true)
+                .redirectErrorStream(false)
                 .start();
     }
 
     private String readProcessOutput(Process process) {
         try {
             return new String(process.getInputStream().readAllBytes());
+        } catch (IOException exception) {
+            return "";
+        }
+    }
+
+    private String readProcessError(Process process) {
+        try {
+            return new String(process.getErrorStream().readAllBytes());
         } catch (IOException exception) {
             return "";
         }
@@ -240,14 +254,15 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
         }
     }
 
-    private String resolveFriendlyError(String commandError) {
+    private String resolveFriendlyError(String commandError, String fallbackMessage) {
         String normalizedError = commandError == null ? "" : commandError.toLowerCase();
 
         if (normalizedError.contains("ffmpeg")) {
             return "We could not convert the audio. Check that ffmpeg is installed on the server.";
         }
 
-        if (normalizedError.contains("unsupported url") || normalizedError.contains("unable to download webpage")) {
+        if (normalizedError.contains("403") || normalizedError.contains("forbidden")
+                || normalizedError.contains("unsupported url") || normalizedError.contains("unable to download webpage")) {
             return "We could not access YouTube right now. Try again later.";
         }
 
@@ -259,7 +274,7 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
             return "We could not find videos with that name. Try a more specific search.";
         }
 
-        return "We could not extract the audio from the selected video. Try another video.";
+        return fallbackMessage;
     }
 
     private void deleteDirectory(Path directory) {
