@@ -4,6 +4,8 @@ import com.msservices.app.dto.AudioExtractionRequest;
 import com.msservices.app.dto.AudioExtractionResponse;
 import com.msservices.app.dto.AudioSearchResponse;
 import com.msservices.app.service.AudioExtractionService;
+
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/audios")
 public class AudioExtractionController {
 
+	@Qualifier("Youtube")
     private final AudioExtractionService audioExtractionService;
 
     public AudioExtractionController(AudioExtractionService audioExtractionService) {

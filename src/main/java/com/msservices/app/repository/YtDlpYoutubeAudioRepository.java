@@ -26,6 +26,7 @@ import org.springframework.stereotype.Repository;
 public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
 
     private static final int SEARCH_LIMIT = 15;
+    private static final long MAX_DURATION_SECONDS = 15 * 60;
     private static final Duration EXTRACTION_TIMEOUT = Duration.ofMinutes(3);
     private static final Duration SEARCH_TIMEOUT = Duration.ofMinutes(1);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
@@ -35,6 +36,8 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
         List<String> command = List.of(
                 "yt-dlp",
                 "--flat-playlist",
+                "--match-filter",
+                "duration<" + MAX_DURATION_SECONDS,
                 "-J",
                 "ytsearch" + SEARCH_LIMIT + ":" + videoName
         );
@@ -126,6 +129,11 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
 
                 String author = readAuthor(entry);
                 Long duration = entry.path("duration").isNumber() ? entry.path("duration").asLong() : null;
+
+                if (duration != null && duration > MAX_DURATION_SECONDS) {
+                    continue;
+                }
+
                 Long viewCount = entry.path("view_count").isNumber() ? entry.path("view_count").asLong() : null;
 
                 results.add(new AudioSearchResultDto(videoId, title, author, duration, viewCount));

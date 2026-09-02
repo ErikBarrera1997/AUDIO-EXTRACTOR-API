@@ -10,7 +10,7 @@ import com.msservices.app.repository.YoutubeAudioRepository;
 import java.util.List;
 import org.springframework.stereotype.Service;
 
-@Service
+@Service("Youtube")
 public class AudioExtractionService {
 
     private final YoutubeAudioRepository youtubeAudioRepository;
