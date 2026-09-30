@@ -1,6 +1,7 @@
 target
 .git
 .gitignore
+.github
 .mvn/wrapper/maven-wrapper.jar
 HELP.md
 *.iml
@@ -9,3 +10,9 @@ HELP.md
 .classpath
 .project
 .factorypath
+cookies.txt
+.env
+*.key
+*.pem
+*.p12
+*.jks

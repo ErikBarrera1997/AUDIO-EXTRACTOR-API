@@ -7,3 +7,24 @@ services:
     envVars:
       - key: PORT
         value: 8080
+      - key: YTDLP_COOKIES_PATH
+        value: /app/cookies.txt
+      - key: YTDLP_COOKIES_REQUIRED
+        value: "true"
+      - key: YTDLP_POT_ENABLED
+        value: "true"
+      - key: YTDLP_POT_PROVIDER_URL
+        value: http://127.0.0.1:4416
+      - key: YTDLP_PLAYER_CLIENTS
+        value: tv_embedded,web_safari,ios,android_vr
+      - key: YOUTUBE_API_SEARCH_ENABLED
+        value: "true"
+      # Set YOUTUBE_API_KEY as a secret in the Render dashboard.
+      - key: YOUTUBE_API_KEY
+        sync: false
+      # Optional: residential proxy. Set YTDLP_PROXY as a secret if needed.
+      - key: YTDLP_PROXY
+        sync: false
+    secretFiles:
+      - key: cookies
+        mountPath: /app/cookies.txt

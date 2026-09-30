@@ -1,0 +1,71 @@
+name: Security Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  security-tests:
+    name: Security test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      - name: Run unit and security tests
+        run: ./mvnw -B --no-transfer-progress test
+
+      - name: Verify no committed secrets
+        run: |
+          if git ls-files | grep -Ei '(^|/)(\.env|cookies\.txt|.*\.key|.*\.pem|.*\.p12|.*\.jks)$'; then
+            echo "::error::Secret-like files are committed in the repository"
+            exit 1
+          fi
+
+      - name: Verify cookies and API key are not hardcoded
+        run: |
+          if grep -rInE 'AIza[0-9A-Za-z_-]{35}' src Dockerfile docker 2>/dev/null; then
+            echo "::error::A YouTube Data API key appears to be hardcoded"
+            exit 1
+          fi
+          if grep -rIn 'SID=H' src Dockerfile docker 2>/dev/null; then
+            echo "::error::A YouTube session cookie appears to be hardcoded"
+            exit 1
+          fi
+
+      - name: Verify the entrypoint never runs as root
+        run: |
+          if grep -q '^USER ' Dockerfile; then
+            grep '^USER ' Dockerfile
+          else
+            echo "::error::Dockerfile has no USER directive, the container runs as root"
+            exit 1
+          fi
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          retention-days: 7
+          if-no-files-found: ignore

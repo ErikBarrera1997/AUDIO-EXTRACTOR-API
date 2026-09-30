@@ -31,3 +31,14 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Secrets ###
+cookies.txt
+*.cookies
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.jks
+secrets/

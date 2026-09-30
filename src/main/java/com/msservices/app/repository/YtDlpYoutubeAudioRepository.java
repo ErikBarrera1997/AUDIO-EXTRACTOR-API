@@ -2,15 +2,16 @@ package com.msservices.app.repository;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.msservices.app.config.YtdlpProperties;
 import com.msservices.app.dto.AudioSearchResultDto;
 import com.msservices.app.dto.ExtractedAudioDto;
 import com.msservices.app.exception.AudioExtractionException;
 import com.msservices.app.exception.InvalidVideoSearchException;
+import com.msservices.app.exception.YoutubeAccessBlockedException;
 import com.msservices.app.exception.YoutubeToolUnavailableException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
@@ -20,98 +21,254 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Repository;
 
 @Repository
 public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
 
-    private static final int SEARCH_LIMIT = 15;
-    private static final long MAX_DURATION_SECONDS = 15 * 60;
-    private static final Duration EXTRACTION_TIMEOUT = Duration.ofMinutes(3);
-    private static final Duration SEARCH_TIMEOUT = Duration.ofMinutes(1);
+    private static final Logger log = LoggerFactory.getLogger(YtDlpYoutubeAudioRepository.class);
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    private final YtdlpProperties properties;
+
+    public YtDlpYoutubeAudioRepository(YtdlpProperties properties) {
+        this.properties = properties;
+    }
 
     @Override
     public List<AudioSearchResultDto> searchVideos(String videoName) {
-        List<String> command = List.of(
-                "yt-dlp",
-                "--flat-playlist",
-                "--match-filter",
-                "duration<" + MAX_DURATION_SECONDS,
-                "-J",
-                "ytsearch" + SEARCH_LIMIT + ":" + videoName
-        );
+        YoutubeAccessBlockedException lastBlock = null;
+        AudioExtractionException lastFailure = null;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(properties.getSearchTimeoutSeconds());
 
-        try {
-            Process process = new ProcessBuilder(command)
-                    .redirectErrorStream(false)
-                    .start();
-
-            CompletableFuture<String> outputFuture = CompletableFuture.supplyAsync(() -> readProcessOutput(process));
-            CompletableFuture<String> errorFuture = CompletableFuture.supplyAsync(() -> readProcessError(process));
-            boolean finished = process.waitFor(SEARCH_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
-
-            if (!finished) {
-                process.destroyForcibly();
-                throw new AudioExtractionException("The search is taking too long. Try again.");
+        for (String playerClient : properties.getPlayerClients()) {
+            int remainingSeconds = remainingSeconds(deadline);
+            if (remainingSeconds <= 0) {
+                lastFailure = new AudioExtractionException("The search is taking too long. Try again.");
+                break;
             }
 
-            String commandOutput = outputFuture.join();
-            String commandError = errorFuture.join();
-
-            if (process.exitValue() != 0) {
-                throw new AudioExtractionException(resolveFriendlyError(commandError, "We could not perform the search. Try again."));
+            List<String> command = buildSearchCommand(videoName, playerClient);
+            try {
+                ProcessOutcome outcome = runCommand(command, remainingSeconds);
+                if (outcome.timedOut()) {
+                    lastFailure = new AudioExtractionException("The search is taking too long. Try again.");
+                    continue;
+                }
+                if (outcome.exitCode() != 0) {
+                    log.warn("yt-dlp search failed for client '{}' (exit {})", playerClient, outcome.exitCode());
+                    if (isAccessBlocked(outcome.errorOutput())) {
+                        lastBlock = new YoutubeAccessBlockedException(
+                                "YouTube is blocking this request from our server. Try again later.");
+                        continue;
+                    }
+                    lastFailure = new AudioExtractionException(
+                            resolveFriendlyError(outcome.errorOutput(), "We could not perform the search. Try again."));
+                    continue;
+                }
+                return rankBestResults(parseSearchResults(outcome.output()));
+            } catch (IOException exception) {
+                throw new YoutubeToolUnavailableException(
+                        "The extraction service is unavailable. Check that yt-dlp and ffmpeg are installed.", exception);
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                throw new AudioExtractionException("The search was interrupted. Try again.", exception);
             }
-
-            return rankBestResults(parseSearchResults(commandOutput));
-        } catch (IOException exception) {
-            throw new YoutubeToolUnavailableException("The extraction service is unavailable. Check that yt-dlp and ffmpeg are installed.", exception);
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new AudioExtractionException("The search was interrupted. Try again.", exception);
         }
+
+        if (lastBlock != null) {
+            throw lastBlock;
+        }
+        throw lastFailure != null
+                ? lastFailure
+                : new YoutubeAccessBlockedException("We could not perform the search right now. Try again later.");
     }
 
     @Override
     public ExtractedAudioDto extractAudioByVideoName(String videoName, String videoId) {
-        Path workDirectory = createWorkDirectory();
+        Path rootDirectory = createWorkDirectory();
+        YoutubeAccessBlockedException lastBlock = null;
+        AudioExtractionException lastFailure = null;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(properties.getExtractionTimeoutSeconds());
 
         try {
-            Process process = startExtractionProcess(videoName, videoId, workDirectory);
-            CompletableFuture<String> commandOutputFuture = CompletableFuture.supplyAsync(() -> readProcessOutput(process));
-            CompletableFuture<String> commandErrorFuture = CompletableFuture.supplyAsync(() -> readProcessError(process));
-            boolean finished = process.waitFor(EXTRACTION_TIMEOUT.toSeconds(), TimeUnit.SECONDS);
+            for (String playerClient : properties.getPlayerClients()) {
+                int remainingSeconds = remainingSeconds(deadline);
+                if (remainingSeconds <= 0) {
+                    lastFailure = new AudioExtractionException(
+                            "The extraction is taking too long. Try another video or try again later.");
+                    break;
+                }
 
-            if (!finished) {
-                process.destroyForcibly();
-                throw new AudioExtractionException("The extraction is taking too long. Try another video or try again later.");
+                Path workDirectory = Files.createDirectory(rootDirectory.resolve(playerClient));
+                Process process = startExtractionProcess(videoName, videoId, workDirectory, playerClient);
+                ProcessOutcome outcome = awaitProcess(process, remainingSeconds);
+
+                if (outcome.timedOut()) {
+                    lastFailure = new AudioExtractionException(
+                            "The extraction is taking too long. Try another video or try again later.");
+                    continue;
+                }
+
+                if (outcome.exitCode() != 0) {
+                    String errorOutput = outcome.errorOutput();
+                    if (isAccessBlocked(errorOutput)) {
+                        log.warn("yt-dlp extraction blocked for client '{}'", playerClient);
+                        lastBlock = new YoutubeAccessBlockedException(
+                                "YouTube is blocking this request from our server. Try again later.");
+                        continue;
+                    }
+                    lastFailure = new AudioExtractionException(resolveFriendlyError(errorOutput,
+                            "We could not extract the audio from the selected video. Try another video."));
+                    continue;
+                }
+
+                Path audioFile = findAudioFile(workDirectory);
+                byte[] audioBytes = Files.readAllBytes(audioFile);
+                String audioBase64 = Base64.getEncoder().encodeToString(audioBytes);
+
+                return new ExtractedAudioDto(
+                        resolveVideoTitle(outcome.output(), videoName),
+                        audioFile.getFileName().toString(),
+                        resolveContentType(audioFile),
+                        audioBase64
+                );
             }
 
-            String commandOutput = commandOutputFuture.join();
-            String commandError = commandErrorFuture.join();
-
-            if (process.exitValue() != 0) {
-                throw new AudioExtractionException(resolveFriendlyError(commandError, "We could not extract the audio from the selected video. Try another video."));
+            if (lastBlock != null) {
+                throw lastBlock;
             }
-
-            Path audioFile = findAudioFile(workDirectory);
-            byte[] audioBytes = Files.readAllBytes(audioFile);
-            String audioBase64 = Base64.getEncoder().encodeToString(audioBytes);
-
-            return new ExtractedAudioDto(
-                    resolveVideoTitle(commandOutput, videoName),
-                    audioFile.getFileName().toString(),
-                    resolveContentType(audioFile),
-                    audioBase64
-            );
+            throw lastFailure != null
+                    ? lastFailure
+                    : new YoutubeAccessBlockedException("We could not extract the audio. Try again later.");
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new AudioExtractionException("The extraction was interrupted. Try again.", exception);
         } catch (IOException exception) {
-            throw new YoutubeToolUnavailableException("The extraction service is unavailable. Check that yt-dlp and ffmpeg are installed.", exception);
+            throw new YoutubeToolUnavailableException(
+                    "The extraction service is unavailable. Check that yt-dlp and ffmpeg are installed.", exception);
         } finally {
-            deleteDirectory(workDirectory);
+            deleteDirectory(rootDirectory);
         }
+    }
+
+    private int remainingSeconds(long deadlineNanos) {
+        long remaining = TimeUnit.NANOSECONDS.toSeconds(deadlineNanos - System.nanoTime());
+        return (int) Math.max(0, Math.min(remaining, Integer.MAX_VALUE));
+    }
+
+    private List<String> buildSearchCommand(String videoName, String playerClient) {
+        List<String> command = new ArrayList<>();
+        command.add("yt-dlp");
+        command.add("--flat-playlist");
+        command.add("--match-filter");
+        command.add("duration<" + properties.getMaxDurationSeconds());
+        command.add("-J");
+        command.addAll(buildCommonArgs(playerClient));
+        command.add("ytsearch" + properties.getSearchLimit() + ":" + videoName);
+        return command;
+    }
+
+    private Process startExtractionProcess(String videoName, String videoId, Path workDirectory, String playerClient)
+            throws IOException {
+        String target = (videoId != null && !videoId.isBlank())
+                ? "https://www.youtube.com/watch?v=" + videoId
+                : "ytsearch1:" + videoName;
+
+        List<String> command = new ArrayList<>();
+        command.add("yt-dlp");
+        command.add(target);
+        command.add("--extract-audio");
+        command.add("--audio-format");
+        command.add("mp3");
+        command.add("--audio-quality");
+        command.add("0");
+        command.add("--print");
+        command.add("title");
+        command.add("--no-simulate");
+        command.add("--no-playlist");
+        command.add("--output");
+        command.add(workDirectory.resolve("%(id)s.%(ext)s").toString());
+        command.addAll(buildCommonArgs(playerClient));
+
+        return new ProcessBuilder(command)
+                .redirectErrorStream(false)
+                .start();
+    }
+
+    private List<String> buildCommonArgs(String playerClient) {
+        List<String> args = new ArrayList<>();
+        args.add("--extractor-args");
+        args.add("youtube:player_client=" + playerClient + ";player_skip=webpage");
+        if (properties.isPotEnabled()) {
+            args.add("--extractor-args");
+            args.add("youtubepot-bgutilhttp:base_url=" + properties.getPotProviderUrl());
+        }
+        Path cookies = resolveCookiesFile();
+        if (cookies != null) {
+            args.add("--cookies");
+            args.add(cookies.toString());
+        }
+        String proxy = properties.getProxy();
+        if (proxy != null && !proxy.isBlank()) {
+            args.add("--proxy");
+            args.add(proxy);
+        }
+        return args;
+    }
+
+    private Path resolveCookiesFile() {
+        String configuredPath = properties.getCookiesPath();
+        if (configuredPath == null || configuredPath.isBlank()) {
+            if (properties.isCookiesRequired()) {
+                throw new YoutubeToolUnavailableException(
+                        "The YouTube cookies file is not configured. Set YTDLP_COOKIES_PATH.");
+            }
+            return null;
+        }
+
+        Path cookies = Path.of(configuredPath);
+        if (!Files.isRegularFile(cookies) || !Files.isReadable(cookies)) {
+            if (properties.isCookiesRequired()) {
+                log.error("Cookies file is not readable at the configured path");
+                throw new YoutubeToolUnavailableException(
+                        "The YouTube session cookies are not available on the server.");
+            }
+            log.warn("Cookies file is not readable, continuing without cookies");
+            return null;
+        }
+        return cookies;
+    }
+
+    private ProcessOutcome runCommand(List<String> command, int timeoutSeconds) throws IOException, InterruptedException {
+        Process process = new ProcessBuilder(command).redirectErrorStream(false).start();
+        return awaitProcess(process, timeoutSeconds);
+    }
+
+    private ProcessOutcome awaitProcess(Process process, int timeoutSeconds) throws InterruptedException {
+        CompletableFuture<String> outputFuture = CompletableFuture.supplyAsync(() -> readProcessOutput(process));
+        CompletableFuture<String> errorFuture = CompletableFuture.supplyAsync(() -> readProcessError(process));
+        boolean finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS);
+
+        if (!finished) {
+            process.destroyForcibly();
+            return new ProcessOutcome(true, -1, outputFuture.getNow(""), errorFuture.getNow(""));
+        }
+
+        return new ProcessOutcome(false, process.exitValue(), outputFuture.join(), errorFuture.join());
+    }
+
+    private boolean isAccessBlocked(String errorOutput) {
+        String normalizedError = errorOutput == null ? "" : errorOutput.toLowerCase();
+        return normalizedError.contains("sign in to confirm")
+                || normalizedError.contains("confirm you're not a bot")
+                || normalizedError.contains("confirm you are not a bot")
+                || normalizedError.contains("bot check")
+                || normalizedError.contains("http error 403")
+                || normalizedError.contains("po token")
+                || normalizedError.contains("failed to extract any player response");
     }
 
     private List<AudioSearchResultDto> parseSearchResults(String commandOutput) {
@@ -130,7 +287,7 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
                 String author = readAuthor(entry);
                 Long duration = entry.path("duration").isNumber() ? entry.path("duration").asLong() : null;
 
-                if (duration != null && duration > MAX_DURATION_SECONDS) {
+                if (duration != null && duration > properties.getMaxDurationSeconds()) {
                     continue;
                 }
 
@@ -283,6 +440,9 @@ public class YtDlpYoutubeAudioRepository implements YoutubeAudioRepository {
         }
 
         return fallbackMessage;
+    }
+
+    private record ProcessOutcome(boolean timedOut, int exitCode, String output, String errorOutput) {
     }
 
     private void deleteDirectory(Path directory) {

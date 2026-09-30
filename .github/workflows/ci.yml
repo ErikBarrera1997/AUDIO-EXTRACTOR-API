@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      - name: Build
+        run: ./mvnw -B --no-transfer-progress clean package
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/*.jar
+          retention-days: 7
+          if-no-files-found: error
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: yoump3api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Inspect runtime user
+        run: |
+          user=$(docker image inspect yoump3api:ci --format '{{.Config.User}}')
+          echo "Runtime user: $user"
+          if [ -z "$user" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
+            echo "::error::The image runs as root"
+            exit 1
+          fi
+
+      - name: Verify the image does not bundle cookies
+        run: |
+          if docker run --rm --entrypoint sh yoump3api:ci -c 'ls /app/cookies.txt 2>/dev/null && exit 1; exit 0'; then
+            echo "Cookies are not baked into the image"
+          else
+            echo "::error::A cookies file is present in the image"
+            exit 1
+          fi
