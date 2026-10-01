@@ -26,6 +26,10 @@ services:
       # Optional: residential proxy. Set YTDLP_PROXY as a secret if needed.
       - key: YTDLP_PROXY
         sync: false
-    secretFiles:
-      - key: cookies
-        mountPath: /app/cookies.txt
+      # Set YTDLP_COOKIES_CONTENT as a secret holding the whole Netscape cookies.txt file, newlines
+      # included. It is an env var rather than a secretFile on purpose: Render mounts secret files
+      # as root with restrictive permissions, and the container runs as the unprivileged appuser,
+      # so a mounted file is unreadable. The entrypoint materialises the content at
+      # YTDLP_COOKIES_PATH as appuser, and the Java side is unaware of the difference.
+      - key: YTDLP_COOKIES_CONTENT
+        sync: false
