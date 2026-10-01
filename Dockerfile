@@ -53,9 +53,9 @@ ENV PATH="/opt/venv/bin:$PATH"
 # PO Token provider server
 COPY --from=pot-build /opt/bgutil-ytdlp-pot-provider /opt/bgutil-ytdlp-pot-provider
 
-COPY --from=build /app/target/*.jar app.jar
+COPY --from=build /app/target/*.jar /app/app.jar
 COPY docker/entrypoint.sh /app/entrypoint.sh
-RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh && ls -la /app/
 
 EXPOSE 8080
 

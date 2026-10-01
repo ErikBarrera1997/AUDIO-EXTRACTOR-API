@@ -2,9 +2,9 @@ name: Security Tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master, beta ]
   pull_request:
-    branches: [ main ]
+    branches: [ master, beta ]
   workflow_dispatch:
 
 permissions:
@@ -58,6 +58,36 @@ jobs:
             grep '^USER ' Dockerfile
           else
             echo "::error::Dockerfile has no USER directive, the container runs as root"
+            exit 1
+          fi
+
+      - name: Verify the Render health check answers GET
+        run: |
+          if ! grep -q 'healthCheckPath: /api/health' render.yaml; then
+            echo "::error::render.yaml must point the health check at /api/health"
+            exit 1
+          fi
+          if grep -q 'healthCheckPath: /api/audios' render.yaml; then
+            echo "::error::the health check points at a POST endpoint"
+            exit 1
+          fi
+
+      - name: Verify the health endpoint is mapped as GET
+        run: |
+          if ! grep -q '@GetMapping("/api/health")' src/main/java/com/msservices/app/controller/HealthController.java; then
+            echo "::error::the health endpoint must be reachable with GET"
+            exit 1
+          fi
+
+      - name: Verify the entrypoint resolves the jar by absolute path
+        run: |
+          bash -n docker/entrypoint.sh
+          if ! grep -q 'APP_JAR="\$APP_DIR/app.jar"' docker/entrypoint.sh; then
+            echo "::error::the entrypoint must use an absolute jar path"
+            exit 1
+          fi
+          if grep -qE '^\s*cd "\$POT_PROVIDER_HOME' docker/entrypoint.sh; then
+            echo "::error::a bare cd into the provider directory would break the working directory"
             exit 1
           fi
 

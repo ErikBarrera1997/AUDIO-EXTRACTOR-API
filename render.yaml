@@ -3,7 +3,8 @@ services:
     name: yoump3api
     runtime: docker
     plan: free
-    healthCheckPath: /api/audios/search
+    healthCheckPath: /api/health
+    autoDeploy: true
     envVars:
       - key: PORT
         value: 8080

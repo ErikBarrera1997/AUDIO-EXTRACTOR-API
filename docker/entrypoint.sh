@@ -1,10 +1,14 @@
 #!/bin/sh
 set -e
 
+APP_DIR=/app
+APP_JAR="$APP_DIR/app.jar"
 POT_PROVIDER_HOME=/opt/bgutil-ytdlp-pot-provider
 POT_PROVIDER_PORT="${YTDLP_POT_PROVIDER_PORT:-4416}"
 POT_PROVIDER_HOST=127.0.0.1
 POT_PROVIDER_LOG=/tmp/pot-provider.log
+
+cd "$APP_DIR"
 
 start_pot_provider() {
     if [ "${YTDLP_POT_ENABLED:-true}" != "true" ]; then
@@ -18,8 +22,9 @@ start_pot_provider() {
     fi
 
     echo "[entrypoint] Starting PO Token provider"
-    cd "$POT_PROVIDER_HOME/server"
-    node build/main.js --port "$POT_PROVIDER_PORT" --host "$POT_PROVIDER_HOST" > "$POT_PROVIDER_LOG" 2>&1 &
+    ( cd "$POT_PROVIDER_HOME/server" \
+        && exec node build/main.js --port "$POT_PROVIDER_PORT" --host "$POT_PROVIDER_HOST" \
+    ) > "$POT_PROVIDER_LOG" 2>&1 &
     POT_PROVIDER_PID=$!
 
     attempts=0
@@ -56,5 +61,13 @@ req.end();
 
 start_pot_provider
 
-echo "[entrypoint] Starting application"
-exec sh -c "java $JAVA_OPTS -jar app.jar"
+if [ ! -f "$APP_JAR" ]; then
+    echo "[entrypoint] ERROR: application jar not found at $APP_JAR"
+    echo "[entrypoint] Contents of $APP_DIR:"
+    ls -la "$APP_DIR" || true
+    exit 1
+fi
+
+echo "[entrypoint] Starting application from $APP_JAR"
+cd "$APP_DIR"
+exec java $JAVA_OPTS -jar "$APP_JAR"
