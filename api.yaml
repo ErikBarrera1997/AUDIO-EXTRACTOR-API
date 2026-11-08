@@ -1,0 +1,216 @@
+openapi: 3.0.3
+info:
+  title: YOUMP3API
+  description: >
+    API REST para buscar videos en YouTube y extraer su audio en formato MP3
+    (codificado en Base64). Usa yt-dlp y ffmpeg internamente.
+    Documentación detallada de clases y manejo de errores: ver docs/API.md.
+  version: 0.0.1-SNAPSHOT
+servers:
+  - url: http://localhost:8088
+    description: Servidor local (server.port=8088)
+
+tags:
+  - name: Audios
+    description: Búsqueda y extracción de audio desde YouTube.
+
+paths:
+  /api/audios/search:
+    post:
+      tags: [Audios]
+      summary: Buscar videos en YouTube
+      description: >
+        Busca hasta 15 videos que coincidan con el nombre proporcionado y
+        devuelve los resultados rankeados por relevancia (vistas + duración).
+      operationId: searchVideos
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AudioExtractionRequest'
+            example:
+              videoName: "never gonna give you up"
+      responses:
+        '200':
+          description: Búsqueda realizada con éxito.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudioSearchResponse'
+        '400':
+          $ref: '#/components/responses/InvalidVideoSearch'
+        '502':
+          $ref: '#/components/responses/AudioExtractionFailure'
+        '503':
+          $ref: '#/components/responses/ToolUnavailable'
+
+  /api/audios/extract:
+    post:
+      tags: [Audios]
+      summary: Extraer el audio de un video en MP3
+      description: >
+        Descarga el audio del video y lo devuelve convertido a MP3 codificado
+        en Base64. Si se provee `videoId`, se extrae ese video directamente;
+        si no, se extrae el primer resultado de la búsqueda por `videoName`.
+      operationId: extractAudio
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AudioExtractionRequest'
+            example:
+              videoName: "never gonna give you up"
+              videoId: "dQw4w9WgXcQ"
+      responses:
+        '200':
+          description: Audio extraído con éxito.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AudioExtractionResponse'
+        '400':
+          $ref: '#/components/responses/InvalidVideoSearch'
+        '502':
+          $ref: '#/components/responses/AudioExtractionFailure'
+        '503':
+          $ref: '#/components/responses/ToolUnavailable'
+        '500':
+          $ref: '#/components/responses/UnexpectedError'
+
+components:
+  schemas:
+    AudioExtractionRequest:
+      type: object
+      required: [videoName]
+      properties:
+        videoName:
+          type: string
+          minLength: 3
+          maxLength: 150
+          description: >
+            Nombre o término de búsqueda del video. Validado por
+            AudioExtractionService (trim, 3-150 caracteres).
+          example: "never gonna give you up"
+        videoId:
+          type: string
+          nullable: true
+          description: >
+            ID de YouTube del video. Opcional en /extract: si se omite,
+            se usa el primer resultado de la búsqueda por nombre.
+            No se utiliza en /search.
+          example: "dQw4w9WgXcQ"
+
+    AudioSearchResultDto:
+      type: object
+      properties:
+        videoId:
+          type: string
+          example: "dQw4w9WgXcQ"
+        title:
+          type: string
+          example: "Rick Astley - Never Gonna Give You Up"
+        author:
+          type: string
+          description: Canal o uploader; "Desconocido" si no viene en los metadatos.
+          example: "Rick Astley"
+        durationSeconds:
+          type: integer
+          format: int64
+          nullable: true
+          example: 213
+        viewCount:
+          type: integer
+          format: int64
+          nullable: true
+          example: 1700000000
+
+    AudioSearchResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: "Resultados obtenidos."
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AudioSearchResultDto'
+
+    AudioExtractionResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: false en las respuestas generadas por el GlobalExceptionHandler.
+          example: true
+        message:
+          type: string
+          example: "Audio extraido correctamente."
+        videoTitle:
+          type: string
+          nullable: true
+          example: "Rick Astley - Never Gonna Give You Up (Official Music Video)"
+        fileName:
+          type: string
+          nullable: true
+          example: "dQw4w9WgXcQ.mp3"
+        contentType:
+          type: string
+          nullable: true
+          example: "audio/mpeg"
+        audioBase64:
+          type: string
+          nullable: true
+          description: Bytes del MP3 codificados en Base64 estándar.
+          example: "<contenido binario del MP3 en Base64>"
+
+  responses:
+    InvalidVideoSearch:
+      description: >
+        InvalidVideoSearchException -> 400. videoName vacío, demasiado corto
+        (<3), demasiado largo (>150), o búsqueda sin resultados.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AudioExtractionResponse'
+          example:
+            success: false
+            message: "The search is too short. Enter at least 3 characters."
+    AudioExtractionFailure:
+      description: >
+        AudioExtractionException -> 502. Timeout de búsqueda (>1 min) o de
+        extracción (>3 min), fallo del proceso yt-dlp, error de parsing o
+        ausencia de archivo de audio.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AudioExtractionResponse'
+          example:
+            success: false
+            message: "The extraction is taking too long. Try another video or try again later."
+    ToolUnavailable:
+      description: >
+        YoutubeToolUnavailableException -> 503. yt-dlp o ffmpeg no están
+        instalados o accesibles en el PATH del servidor.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AudioExtractionResponse'
+          example:
+            success: false
+            message: "The extraction service is unavailable. Check that yt-dlp and ffmpeg are installed."
+    UnexpectedError:
+      description: >
+        Excepción no contemplada capturada por el handler genérico -> 500.
+        El mensaje es siempre genérico para no exponer detalles internos.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AudioExtractionResponse'
+          example:
+            success: false
+            message: "We could not process your request right now. Try again later."

@@ -1,6 +1,7 @@
 package com.msservices.app.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -16,6 +17,12 @@ class SecureConfigurationDefaultsTest {
     }
 
     @Test
+    @DisplayName("Per-request user cookies are enabled by default")
+    void userCookiesEnabledByDefault() {
+        assertTrue(new YtdlpProperties().isUserCookiesEnabled());
+    }
+
+    @Test
     @DisplayName("The cookies path is not baked into the source tree")
     void cookiesPathIsOutsideTheProject() {
         String cookiesPath = new YtdlpProperties().getCookiesPath();
@@ -23,11 +30,12 @@ class SecureConfigurationDefaultsTest {
     }
 
     @Test
-    @DisplayName("The PO Token provider is enabled and bound to loopback")
-    void potProviderIsLoopbackOnly() {
+    @DisplayName("The PO Token provider is off by default and bound to loopback if ever enabled")
+    void potProviderIsDisabledAndLoopbackOnly() {
         YtdlpProperties properties = new YtdlpProperties();
 
-        assertTrue(properties.isPotEnabled());
+        assertFalse(properties.isPotEnabled(),
+                "the provider was never the cause of the media block, so it must not be on by default");
         String url = properties.getPotProviderUrl();
         assertTrue(url.startsWith("http://127.0.0.1:"), "provider must not be exposed publicly, got: " + url);
     }

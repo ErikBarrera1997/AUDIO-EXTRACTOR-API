@@ -91,6 +91,24 @@ jobs:
             exit 1
           fi
 
+      - name: Verify the PO Token provider stays out of the image
+        run: |
+          # The provider never caused the media-URL blocks (those track data centre IP reputation),
+          # so it was removed to cut build time and image size. Fail the build if it creeps back in
+          # without an explicit decision, since it drags in a whole Node.js stage.
+          if grep -qE 'FROM node:' Dockerfile; then
+            echo "::error::a Node.js build stage is back in the Dockerfile"
+            exit 1
+          fi
+          if grep -qiE 'bgutil|nodesource' Dockerfile docker/entrypoint.sh; then
+            echo "::error::PO Token provider tooling is back in the build or entrypoint"
+            exit 1
+          fi
+          if grep -q '^ENV YTDLP_POT_ENABLED=true' Dockerfile; then
+            echo "::error::the PO Token provider must not be enabled by default in the image"
+            exit 1
+          fi
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4

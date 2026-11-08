@@ -27,6 +27,45 @@ class GlobalExceptionHandlerSecurityTest {
     }
 
     @Test
+    @DisplayName("Invalid per-request cookies return 400 without echoing their content")
+    void invalidCookiesReturnBadRequest() {
+        ResponseEntity<AudioExtractionResponse> response = handler.handleInvalidCookie(
+                new InvalidCookieException(
+                        "The cookies must be a Netscape cookies.txt file. Export the file from your browser and send its content."));
+
+        assertEquals(HttpStatus.BAD_REQUEST, response.getStatusCode());
+        assertFalse(response.getBody().isSuccess());
+        assertTrue(response.getBody().getMessage().contains("Netscape"));
+        assertFalse(response.getBody().getMessage().contains("supersecret"));
+    }
+
+    @Test
+    @DisplayName("Missing cookie consent returns 403 instead of silently using the cookies")
+    void missingConsentReturnsForbidden() {
+        ResponseEntity<AudioExtractionResponse> response = handler.handleCookieConsentRequired(
+                new CookieConsentRequiredException(
+                        "Resend with dataUsageConsent=true to allow cookies."));
+
+        assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+        assertFalse(response.getBody().isSuccess());
+        assertTrue(response.getBody().getMessage().contains("dataUsageConsent"));
+    }
+
+    @Test
+    @DisplayName("Unknown audio servers return 400 and unavailable servers return 503")
+    void audioServerErrorsAreMapped() {
+        ResponseEntity<AudioExtractionResponse> unsupported = handler.handleUnsupportedAudioServer(
+                new UnsupportedAudioServerException("Available servers: youtube."));
+        assertEquals(HttpStatus.BAD_REQUEST, unsupported.getStatusCode());
+        assertFalse(unsupported.getBody().isSuccess());
+
+        ResponseEntity<AudioExtractionResponse> unavailable = handler.handleAudioServerUnavailable(
+                new AudioServerUnavailableException("No audio server is configured."));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, unavailable.getStatusCode());
+        assertFalse(unavailable.getBody().isSuccess());
+    }
+
+    @Test
     @DisplayName("A bot-check block returns 503 instead of a 200 with an empty body")
     void accessBlockedReturnsServiceUnavailable() {
         ResponseEntity<AudioExtractionResponse> response = handler.handleAccessBlocked(

@@ -28,8 +28,8 @@ class HealthControllerTest {
         MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
 
         mockMvc.perform(get("/api/health").accept(MediaType.APPLICATION_JSON))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.status").value("DEGRADED"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"));
     }
 
     @Test
@@ -77,6 +77,7 @@ class HealthControllerTest {
         YtdlpProperties properties = new YtdlpProperties();
         properties.setCookiesPath("/nonexistent/cookies.txt");
         properties.setCookiesRequired(true);
+        properties.setUserCookiesEnabled(false);
 
         HealthController controller = controllerWith(properties, new YoutubeDataApiProperties());
         ResponseEntity<Map<String, Object>> response = controller.health();
@@ -84,6 +85,24 @@ class HealthControllerTest {
         Assertions.assertEquals(HttpStatus.SERVICE_UNAVAILABLE, response.getStatusCode());
         Assertions.assertEquals("DEGRADED", response.getBody().get("status"));
         Assertions.assertEquals("missing", response.getBody().get("cookies"));
+        Assertions.assertEquals("disabled", response.getBody().get("userCookies"));
+    }
+
+    @Test
+    @DisplayName("User cookies enabled keeps the service UP without a static cookies file")
+    void healthyWhenUserCookiesEnabled() {
+        YtdlpProperties properties = new YtdlpProperties();
+        properties.setCookiesPath("/nonexistent/cookies.txt");
+        properties.setCookiesRequired(true);
+        properties.setUserCookiesEnabled(true);
+
+        ResponseEntity<Map<String, Object>> response = controllerWith(properties, new YoutubeDataApiProperties())
+                .health();
+
+        Assertions.assertEquals(HttpStatus.OK, response.getStatusCode());
+        Assertions.assertEquals("UP", response.getBody().get("status"));
+        Assertions.assertEquals("missing", response.getBody().get("cookies"));
+        Assertions.assertEquals("enabled", response.getBody().get("userCookies"));
     }
 
     @Test
@@ -132,6 +151,38 @@ class HealthControllerTest {
         dataApi.setApiKey("AIza-not-a-real-key");
         Assertions.assertEquals("data-api",
                 controllerWith(properties, dataApi).health().getBody().get("search"));
+    }
+
+    @Test
+    @DisplayName("Health reports the proxy as not configured when none is set")
+    void reportsProxyNotConfigured() {
+        YtdlpProperties properties = new YtdlpProperties();
+        properties.setCookiesRequired(false);
+
+        Assertions.assertEquals("not-configured", controllerWith(properties, new YoutubeDataApiProperties())
+                .health().getBody().get("proxy"));
+    }
+
+    @Test
+    @DisplayName("Health reports the proxy as configured without exposing it")
+    void reportsProxyConfiguredWithoutLeakingIt() throws Exception {
+        YtdlpProperties properties = new YtdlpProperties();
+        properties.setCookiesRequired(false);
+        properties.setProxy("http://provider-user:sup3rs3cret@us-west.proxy.test:8000");
+
+        HealthController controller = controllerWith(properties, new YoutubeDataApiProperties());
+        MockMvc mockMvc = MockMvcBuilders.standaloneSetup(controller).build();
+
+        String body = mockMvc.perform(get("/api/health").accept(MediaType.APPLICATION_JSON))
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        Assertions.assertEquals("configured", controller.health().getBody().get("proxy"));
+        Assertions.assertFalse(body.contains("sup3rs3cret"), "must not expose the proxy password");
+        Assertions.assertFalse(body.contains("provider-user"), "must not expose the proxy username");
+        Assertions.assertFalse(body.contains("proxy.test"), "must not expose the proxy host");
+        Assertions.assertFalse(body.contains("http://"), "must not expose the proxy scheme");
     }
 
     @Test

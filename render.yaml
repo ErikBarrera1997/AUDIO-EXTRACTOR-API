@@ -12,10 +12,13 @@ services:
         value: /app/cookies.txt
       - key: YTDLP_COOKIES_REQUIRED
         value: "true"
-      - key: YTDLP_POT_ENABLED
+      # Clients may send their own Netscape cookies.txt content in the "cookies" field of
+      # /api/audios/search and /api/audios/extract. That content is used for one request only and
+      # never stored. The static cookie below is the fallback for requests that send none.
+      - key: YTDLP_USER_COOKIES_ENABLED
         value: "true"
-      - key: YTDLP_POT_PROVIDER_URL
-        value: http://127.0.0.1:4416
+      - key: YTDLP_POT_ENABLED
+        value: "false"
       - key: YTDLP_PLAYER_CLIENTS
         value: tv_embedded,web_safari,ios,android_vr
       - key: YOUTUBE_API_SEARCH_ENABLED
@@ -23,13 +26,31 @@ services:
       # Set YOUTUBE_API_KEY as a secret in the Render dashboard.
       - key: YOUTUBE_API_KEY
         sync: false
-      # Optional: residential proxy. Set YTDLP_PROXY as a secret if needed.
+      # Optional: residential proxy, forwarded verbatim to yt-dlp as --proxy.
+      #
+      # Accepted shapes:
+      #   http://usuario:contrasena@host:puerto
+      #   http://host:puerto                 (when the provider needs no auth)
+      #   socks5://usuario:contrasena@host:puerto
+      # Supported schemes are http, https, socks4, socks5 and socks5h. Anything else fails the
+      # deploy on purpose: a typo here would otherwise surface as an opaque yt-dlp error on every
+      # request instead of at startup.
+      #
+      # If the provider password contains @ : / or #, it must arrive percent-encoded
+      # (%40 %3A %2F %23) or yt-dlp will misread the authority. Most providers hand it over already
+      # encoded, so paste it verbatim rather than encoding it a second time.
+      #
+      # YouTube blocks media URLs by IP reputation, and Render's data centre ranges are on that
+      # blocklist, so this is what actually restores extraction. /api/health reports only
+      # "configured" or "not-configured"; it never echoes the host or the credentials.
       - key: YTDLP_PROXY
         sync: false
-      # Set YTDLP_COOKIES_CONTENT as a secret holding the whole Netscape cookies.txt file, newlines
-      # included. It is an env var rather than a secretFile on purpose: Render mounts secret files
-      # as root with restrictive permissions, and the container runs as the unprivileged appuser,
-      # so a mounted file is unreadable. The entrypoint materialises the content at
-      # YTDLP_COOKIES_PATH as appuser, and the Java side is unaware of the difference.
+      # Optional static fallback. Set YTDLP_COOKIES_CONTENT as a secret holding the whole Netscape
+      # cookies.txt file, newlines included. Requests that send their own "cookies" use those
+      # instead; this file is only used when the request carries none. It is an env var rather than
+      # a secretFile on purpose: Render mounts secret files as root with restrictive permissions,
+      # and the container runs as the unprivileged appuser, so a mounted file is unreadable. The
+      # entrypoint materialises the content at YTDLP_COOKIES_PATH as appuser, and the Java side is
+      # unaware of the difference.
       - key: YTDLP_COOKIES_CONTENT
         sync: false

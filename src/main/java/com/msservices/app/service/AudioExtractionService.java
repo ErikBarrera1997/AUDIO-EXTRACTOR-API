@@ -5,57 +5,97 @@ import com.msservices.app.dto.AudioExtractionResponse;
 import com.msservices.app.dto.AudioSearchResponse;
 import com.msservices.app.dto.AudioSearchResultDto;
 import com.msservices.app.dto.ExtractedAudioDto;
+import com.msservices.app.exception.CookieConsentRequiredException;
 import com.msservices.app.exception.InvalidVideoSearchException;
+import com.msservices.app.provider.AudioServerProvider;
+import com.msservices.app.provider.AudioServerRegistry;
+import com.msservices.app.provider.YouTubeAudioServerProvider;
 import com.msservices.app.repository.YoutubeAudioRepository;
 import com.msservices.app.repository.YoutubeDataApiSearchRepository;
 import java.util.List;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service("Youtube")
 public class AudioExtractionService {
 
-    private static final Logger log = LoggerFactory.getLogger(AudioExtractionService.class);
+    private static final String COOKIE_CONSENT_MESSAGE =
+            "Your cookies were not used because the data usage consent is missing. "
+                    + "Resend the request with dataUsageConsent=true to allow cookies, "
+                    + "or send dataUsageConsent=false to continue without cookies.";
     private static final int MAX_VIDEO_ID_LENGTH = 32;
 
-    private final YoutubeAudioRepository youtubeAudioRepository;
-    private final YoutubeDataApiSearchRepository dataApiSearchRepository;
+    private final AudioServerRegistry serverRegistry;
 
+    @Autowired
+    public AudioExtractionService(AudioServerRegistry serverRegistry) {
+        this.serverRegistry = serverRegistry;
+    }
+
+    // Kept for callers and tests that build the service by hand. It wires the only provider that
+    // exists today; new providers are picked up by Spring through AudioServerRegistry.
     public AudioExtractionService(YoutubeAudioRepository youtubeAudioRepository,
                                   YoutubeDataApiSearchRepository dataApiSearchRepository) {
-        this.youtubeAudioRepository = youtubeAudioRepository;
-        this.dataApiSearchRepository = dataApiSearchRepository;
+        this(new AudioServerRegistry(List.of(
+                new YouTubeAudioServerProvider(youtubeAudioRepository, dataApiSearchRepository))));
     }
 
     public AudioSearchResponse searchVideos(String videoName) {
+        return searchVideos(videoName, null, Boolean.TRUE, null);
+    }
+
+    public AudioSearchResponse searchVideos(String videoName, String rawCookies) {
+        // Legacy overload: the caller already has the cookies, so consent is implied.
+        return searchVideos(videoName, rawCookies, Boolean.TRUE, null);
+    }
+
+    public AudioSearchResponse searchVideos(String videoName, String rawCookies,
+                                            Boolean dataUsageConsent, String serverId) {
         String normalizedName = validateAndNormalizeVideoName(videoName);
-        List<AudioSearchResultDto> results = dataApiSearchRepository.isAvailable()
-                ? searchWithDataApi(normalizedName)
-                : youtubeAudioRepository.searchVideos(normalizedName);
+        String cookies = resolveCookies(rawCookies, dataUsageConsent);
+        AudioServerProvider provider = serverRegistry.resolve(serverId);
+        List<AudioSearchResultDto> results = provider.search(normalizedName, cookies);
         return AudioSearchResponse.success("Resultados obtenidos.", results);
     }
 
-    private List<AudioSearchResultDto> searchWithDataApi(String normalizedName) {
-        try {
-            return dataApiSearchRepository.searchVideos(normalizedName);
-        } catch (InvalidVideoSearchException exception) {
-            throw exception;
-        } catch (RuntimeException exception) {
-            log.warn("YouTube Data API search failed, falling back to yt-dlp: {}", exception.getMessage());
-            return youtubeAudioRepository.searchVideos(normalizedName);
-        }
-    }
-
     public AudioExtractionResponse extractAudio(AudioExtractionRequest request) {
-        String videoName = validateAndNormalizeVideoName(request);
         String videoId = validateAndNormalizeVideoId(request == null ? null : request.getVideoId());
-        ExtractedAudioDto extractedAudio = youtubeAudioRepository.extractAudioByVideoName(videoName, videoId);
+        String videoName = validateAndNormalizeExtractionName(
+                request == null ? null : request.getVideoName(), videoId);
+        String cookies = resolveCookies(
+                request == null ? null : request.getCookies(),
+                request == null ? null : request.getDataUsageConsent());
+        AudioServerProvider provider = serverRegistry.resolve(
+                request == null ? null : request.getServerId());
+        ExtractedAudioDto extractedAudio = provider.extract(videoName, videoId, cookies);
         return AudioExtractionResponse.success("Audio extraido correctamente.", extractedAudio);
     }
 
-    private String validateAndNormalizeVideoName(AudioExtractionRequest request) {
-        return validateAndNormalizeVideoName(request == null ? null : request.getVideoName());
+    // A null consent means the client has not shown the notice yet. A false consent means the user
+    // declined: the request continues without cookies through the default server. Neither case
+    // logs or echoes the cookie content.
+    private String resolveCookies(String rawCookies, Boolean dataUsageConsent) {
+        if (rawCookies == null || rawCookies.isBlank()) {
+            return null;
+        }
+        if (dataUsageConsent == null) {
+            throw new CookieConsentRequiredException(COOKIE_CONSENT_MESSAGE);
+        }
+        return dataUsageConsent ? rawCookies : null;
+    }
+
+    // A valid video id fully identifies the target, so the name is optional there. The length rules
+    // only apply when the name is what yt-dlp has to search with.
+    private String validateAndNormalizeExtractionName(String rawVideoName, String videoId) {
+        if (videoId != null) {
+            if (rawVideoName == null || rawVideoName.trim().isEmpty()) {
+                return null;
+            }
+            String trimmed = rawVideoName.trim();
+            return trimmed.length() > 150 ? trimmed.substring(0, 150) : trimmed;
+        }
+
+        return validateAndNormalizeVideoName(rawVideoName);
     }
 
     private String validateAndNormalizeVideoId(String rawVideoId) {

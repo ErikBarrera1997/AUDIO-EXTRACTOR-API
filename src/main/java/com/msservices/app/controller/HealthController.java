@@ -25,12 +25,17 @@ public class HealthController {
     @GetMapping("/api/health")
     public ResponseEntity<Map<String, Object>> health() {
         boolean cookiesAvailable = cookiesFileAvailable();
-        boolean extractionReady = cookiesAvailable || !ytdlpProperties.isCookiesRequired();
+        boolean userCookiesEnabled = ytdlpProperties.isUserCookiesEnabled();
+        boolean extractionReady = userCookiesEnabled || cookiesAvailable || !ytdlpProperties.isCookiesRequired();
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("status", extractionReady ? "UP" : "DEGRADED");
         body.put("cookies", cookiesAvailable ? "available" : "missing");
+        body.put("userCookies", userCookiesEnabled ? "enabled" : "disabled");
         body.put("poToken", ytdlpProperties.isPotEnabled() ? "enabled" : "disabled");
+        // Presence only. This endpoint is public and unauthenticated, so the scheme, host and
+        // credentials of the provider must never appear here.
+        body.put("proxy", ytdlpProperties.getProxy().isBlank() ? "not-configured" : "configured");
         body.put("search", dataApiProperties.isEnabled() && !dataApiProperties.getApiKey().isBlank()
                 ? "data-api"
                 : "yt-dlp");

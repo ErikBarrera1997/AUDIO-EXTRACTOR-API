@@ -1,11 +1,13 @@
 package com.msservices.app.service;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -16,7 +18,10 @@ import com.msservices.app.dto.AudioExtractionResponse;
 import com.msservices.app.dto.AudioSearchResponse;
 import com.msservices.app.dto.AudioSearchResultDto;
 import com.msservices.app.dto.ExtractedAudioDto;
+import com.msservices.app.exception.CookieConsentRequiredException;
+import com.msservices.app.exception.InvalidCookieException;
 import com.msservices.app.exception.InvalidVideoSearchException;
+import com.msservices.app.exception.UnsupportedAudioServerException;
 import com.msservices.app.repository.YoutubeAudioRepository;
 import com.msservices.app.repository.YoutubeDataApiSearchRepository;
 import java.util.List;
@@ -30,6 +35,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 
 class AudioExtractionServiceSecurityTest {
+
+    private static final String USER_COOKIES =
+            "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tfake-session\n";
 
     private YoutubeAudioRepository youtubeAudioRepository;
     private YoutubeDataApiSearchRepository dataApiSearchRepository;
@@ -124,6 +132,67 @@ class AudioExtractionServiceSecurityTest {
 
         assertTrue(response.isSuccess());
         verify(youtubeAudioRepository).extractAudioByVideoName("valid video name", "dQw4w9WgXcQ");
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = {"   ", "\t"})
+    @DisplayName("Extracts by video id alone when no video name is supplied")
+    void extractsByVideoIdWithoutVideoName(String videoName) {
+        when(youtubeAudioRepository.extractAudioByVideoName(any(), any()))
+                .thenReturn(new ExtractedAudioDto("title", "audio.mp3", "audio/mpeg", "AAA="));
+
+        AudioExtractionRequest request = new AudioExtractionRequest();
+        request.setVideoName(videoName);
+        request.setVideoId("dQw4w9WgXcQ");
+
+        AudioExtractionResponse response = service.extractAudio(request);
+
+        assertTrue(response.isSuccess());
+        verify(youtubeAudioRepository).extractAudioByVideoName(null, "dQw4w9WgXcQ");
+    }
+
+    @Test
+    @DisplayName("Skips the minimum name length rule when a valid video id is present")
+    void ignoresShortVideoNameWhenVideoIdPresent() {
+        when(youtubeAudioRepository.extractAudioByVideoName(any(), any()))
+                .thenReturn(new ExtractedAudioDto("title", "audio.mp3", "audio/mpeg", "AAA="));
+
+        AudioExtractionRequest request = new AudioExtractionRequest();
+        request.setVideoName("ab");
+        request.setVideoId("dQw4w9WgXcQ");
+
+        AudioExtractionResponse response = service.extractAudio(request);
+
+        assertTrue(response.isSuccess());
+        verify(youtubeAudioRepository).extractAudioByVideoName("ab", "dQw4w9WgXcQ");
+    }
+
+    @Test
+    @DisplayName("Truncates an oversized video name when the video id identifies the target")
+    void truncatesOversizedVideoNameWhenVideoIdPresent() {
+        when(youtubeAudioRepository.extractAudioByVideoName(any(), any()))
+                .thenReturn(new ExtractedAudioDto("title", "audio.mp3", "audio/mpeg", "AAA="));
+
+        AudioExtractionRequest request = new AudioExtractionRequest();
+        request.setVideoName("a".repeat(400));
+        request.setVideoId("dQw4w9WgXcQ");
+
+        service.extractAudio(request);
+
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(youtubeAudioRepository).extractAudioByVideoName(captor.capture(), any());
+        assertEquals(150, captor.getValue().length());
+    }
+
+    @Test
+    @DisplayName("Rejects an invalid video id even when the video name is missing")
+    void rejectsMaliciousVideoIdWithoutVideoName() {
+        AudioExtractionRequest request = new AudioExtractionRequest();
+        request.setVideoId("https://evil.example.com/video");
+
+        assertThrows(InvalidVideoSearchException.class, () -> service.extractAudio(request));
+        verifyNoInteractions(youtubeAudioRepository);
     }
 
     @Test
@@ -226,6 +295,119 @@ class AudioExtractionServiceSecurityTest {
         assertEquals("Audio extraido correctamente.", response.getMessage());
         assertFalse(response.getMessage().contains("Exception"));
         assertFalse(response.getMessage().contains("/app/"));
+    }
+
+    @Test
+    @DisplayName("Forwards per-request cookies to the repository as normalized Netscape content")
+    void forwardsUserCookiesToTheRepository() {
+        when(youtubeAudioRepository.extractAudioByVideoName(anyString(), any(), anyString()))
+                .thenReturn(new ExtractedAudioDto("title", "audio.mp3", "audio/mpeg", "AAA="));
+
+        AudioExtractionRequest request = requestWithId("dQw4w9WgXcQ");
+        request.setCookies(USER_COOKIES);
+        request.setDataUsageConsent(true);
+
+        service.extractAudio(request);
+
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(youtubeAudioRepository).extractAudioByVideoName(
+                eq("valid video name"), eq("dQw4w9WgXcQ"), captor.capture());
+        assertTrue(captor.getValue().startsWith("# Netscape HTTP Cookie File"));
+        assertTrue(captor.getValue().contains("youtube.com"));
+    }
+
+    @Test
+    @DisplayName("Rejects malformed per-request cookies before touching the repository")
+    void rejectsMalformedUserCookies() {
+        AudioExtractionRequest request = requestWithId("dQw4w9WgXcQ");
+        request.setCookies("SID=fake-session");
+        request.setDataUsageConsent(true);
+
+        assertThrows(InvalidCookieException.class, () -> service.extractAudio(request));
+        verifyNoInteractions(youtubeAudioRepository);
+    }
+
+    @Test
+    @DisplayName("Cookies without consent are rejected before touching the repository")
+    void rejectsCookiesWithoutConsent() {
+        AudioExtractionRequest request = requestWithId("dQw4w9WgXcQ");
+        request.setCookies(USER_COOKIES);
+
+        CookieConsentRequiredException exception = assertThrows(
+                CookieConsentRequiredException.class, () -> service.extractAudio(request));
+        assertTrue(exception.getMessage().contains("dataUsageConsent"));
+        assertFalse(exception.getMessage().contains("fake-session"));
+        verifyNoInteractions(youtubeAudioRepository);
+    }
+
+    @Test
+    @DisplayName("Declining consent continues without cookies")
+    void declinedConsentDropsCookies() {
+        when(youtubeAudioRepository.extractAudioByVideoName(anyString(), any()))
+                .thenReturn(new ExtractedAudioDto("title", "audio.mp3", "audio/mpeg", "AAA="));
+
+        AudioExtractionRequest request = requestWithId("dQw4w9WgXcQ");
+        request.setCookies(USER_COOKIES);
+        request.setDataUsageConsent(false);
+
+        service.extractAudio(request);
+
+        verify(youtubeAudioRepository).extractAudioByVideoName("valid video name", "dQw4w9WgXcQ");
+        verify(youtubeAudioRepository, never()).extractAudioByVideoName(anyString(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("Search rejects cookies without consent")
+    void searchRejectsCookiesWithoutConsent() {
+        assertThrows(CookieConsentRequiredException.class,
+                () -> service.searchVideos("never gonna give you up", USER_COOKIES, null, null));
+        verifyNoInteractions(youtubeAudioRepository);
+    }
+
+    @Test
+    @DisplayName("Declining consent makes the search use the default cookie-less path")
+    void searchDeclinedConsentUsesDefaultServerWithoutCookies() {
+        when(dataApiSearchRepository.isAvailable()).thenReturn(false);
+        when(youtubeAudioRepository.searchVideos(anyString()))
+                .thenReturn(List.of(new AudioSearchResultDto("id1", "title", "author", 100L, 10L)));
+
+        service.searchVideos("never gonna give you up", USER_COOKIES, false, null);
+
+        verify(youtubeAudioRepository).searchVideos("never gonna give you up");
+        verify(youtubeAudioRepository, never()).searchVideos(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("An unknown server id is rejected without touching the repositories")
+    void rejectsUnknownServer() {
+        assertThrows(UnsupportedAudioServerException.class,
+                () -> service.searchVideos("never gonna give you up", null, true, "not-a-server"));
+        verifyNoInteractions(youtubeAudioRepository);
+    }
+
+    @Test
+    @DisplayName("Search forwards per-request cookies when it uses yt-dlp")
+    void searchForwardsUserCookies() {
+        when(dataApiSearchRepository.isAvailable()).thenReturn(false);
+        when(youtubeAudioRepository.searchVideos(anyString(), anyString()))
+                .thenReturn(List.of(new AudioSearchResultDto("id1", "title", "author", 100L, 10L)));
+
+        service.searchVideos("never gonna give you up", USER_COOKIES);
+
+        ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
+        verify(youtubeAudioRepository).searchVideos(eq("never gonna give you up"), captor.capture());
+        assertTrue(captor.getValue().contains("youtube.com"));
+    }
+
+    @Test
+    @DisplayName("An invalid cookie payload does not break a Data API search")
+    void dataApiSearchDoesNotNeedCookies() {
+        when(dataApiSearchRepository.isAvailable()).thenReturn(true);
+        when(dataApiSearchRepository.searchVideos(anyString()))
+                .thenReturn(List.of(new AudioSearchResultDto("id1", "title", "author", 100L, 10L)));
+
+        assertDoesNotThrow(() -> service.searchVideos("never gonna give you up", "not-a-cookie-file"));
+        verify(youtubeAudioRepository, never()).searchVideos(anyString());
     }
 
     private AudioExtractionRequest requestWithId(String videoId) {

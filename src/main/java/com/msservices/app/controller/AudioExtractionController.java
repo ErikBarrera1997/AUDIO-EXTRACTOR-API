@@ -25,7 +25,12 @@ public class AudioExtractionController {
 
     @PostMapping("/search")
     public ResponseEntity<AudioSearchResponse> searchVideos(@RequestBody AudioExtractionRequest request) {
-        return ResponseEntity.ok(audioExtractionService.searchVideos(request.getVideoName()));
+        String videoName = request == null ? null : request.getVideoName();
+        String cookies = request == null ? null : request.getCookies();
+        Boolean dataUsageConsent = request == null ? null : request.getDataUsageConsent();
+        String serverId = request == null ? null : request.getServerId();
+        return ResponseEntity.ok(
+                audioExtractionService.searchVideos(videoName, cookies, dataUsageConsent, serverId));
     }
 
     @PostMapping("/extract")

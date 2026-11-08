@@ -25,6 +25,37 @@ public class GlobalExceptionHandler {
                 .body(AudioExtractionResponse.failure(exception.getMessage()));
     }
 
+    @ExceptionHandler(InvalidCookieException.class)
+    public ResponseEntity<AudioExtractionResponse> handleInvalidCookie(InvalidCookieException exception) {
+        return ResponseEntity
+                .badRequest()
+                .body(AudioExtractionResponse.failure(exception.getMessage()));
+    }
+
+    @ExceptionHandler(CookieConsentRequiredException.class)
+    public ResponseEntity<AudioExtractionResponse> handleCookieConsentRequired(
+            CookieConsentRequiredException exception) {
+        return ResponseEntity
+                .status(HttpStatus.FORBIDDEN)
+                .body(AudioExtractionResponse.failure(exception.getMessage()));
+    }
+
+    @ExceptionHandler(AudioServerUnavailableException.class)
+    public ResponseEntity<AudioExtractionResponse> handleAudioServerUnavailable(
+            AudioServerUnavailableException exception) {
+        return ResponseEntity
+                .status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(AudioExtractionResponse.failure(exception.getMessage()));
+    }
+
+    @ExceptionHandler(UnsupportedAudioServerException.class)
+    public ResponseEntity<AudioExtractionResponse> handleUnsupportedAudioServer(
+            UnsupportedAudioServerException exception) {
+        return ResponseEntity
+                .badRequest()
+                .body(AudioExtractionResponse.failure(exception.getMessage()));
+    }
+
     @ExceptionHandler(YoutubeAccessBlockedException.class)
     public ResponseEntity<AudioExtractionResponse> handleAccessBlocked(YoutubeAccessBlockedException exception) {
         log.warn("YouTube access blocked: {}", exception.getMessage());
