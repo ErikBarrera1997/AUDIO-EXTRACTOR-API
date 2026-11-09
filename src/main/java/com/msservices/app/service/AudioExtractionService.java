@@ -9,6 +9,7 @@ import com.msservices.app.exception.CookieConsentRequiredException;
 import com.msservices.app.exception.InvalidVideoSearchException;
 import com.msservices.app.provider.AudioServerProvider;
 import com.msservices.app.provider.AudioServerRegistry;
+import com.msservices.app.provider.LocalAudioServerProvider;
 import com.msservices.app.provider.YouTubeAudioServerProvider;
 import com.msservices.app.repository.YoutubeAudioRepository;
 import com.msservices.app.repository.YoutubeDataApiSearchRepository;
@@ -32,12 +33,13 @@ public class AudioExtractionService {
         this.serverRegistry = serverRegistry;
     }
 
-    // Kept for callers and tests that build the service by hand. It wires the only provider that
-    // exists today; new providers are picked up by Spring through AudioServerRegistry.
+    // Kept for callers and tests that build the service by hand. It wires the providers that exist
+    // today; new providers are picked up by Spring through AudioServerRegistry.
     public AudioExtractionService(YoutubeAudioRepository youtubeAudioRepository,
                                   YoutubeDataApiSearchRepository dataApiSearchRepository) {
         this(new AudioServerRegistry(List.of(
-                new YouTubeAudioServerProvider(youtubeAudioRepository, dataApiSearchRepository))));
+                new YouTubeAudioServerProvider(youtubeAudioRepository, dataApiSearchRepository),
+                new LocalAudioServerProvider(youtubeAudioRepository, dataApiSearchRepository))));
     }
 
     public AudioSearchResponse searchVideos(String videoName) {
@@ -52,8 +54,10 @@ public class AudioExtractionService {
     public AudioSearchResponse searchVideos(String videoName, String rawCookies,
                                             Boolean dataUsageConsent, String serverId) {
         String normalizedName = validateAndNormalizeVideoName(videoName);
-        String cookies = resolveCookies(rawCookies, dataUsageConsent);
         AudioServerProvider provider = serverRegistry.resolve(serverId);
+        String cookies = provider.supportsUserCookies()
+                ? resolveCookies(rawCookies, dataUsageConsent)
+                : null;
         List<AudioSearchResultDto> results = provider.search(normalizedName, cookies);
         return AudioSearchResponse.success("Resultados obtenidos.", results);
     }
@@ -62,11 +66,13 @@ public class AudioExtractionService {
         String videoId = validateAndNormalizeVideoId(request == null ? null : request.getVideoId());
         String videoName = validateAndNormalizeExtractionName(
                 request == null ? null : request.getVideoName(), videoId);
-        String cookies = resolveCookies(
-                request == null ? null : request.getCookies(),
-                request == null ? null : request.getDataUsageConsent());
         AudioServerProvider provider = serverRegistry.resolve(
                 request == null ? null : request.getServerId());
+        String cookies = provider.supportsUserCookies()
+                ? resolveCookies(
+                        request == null ? null : request.getCookies(),
+                        request == null ? null : request.getDataUsageConsent())
+                : null;
         ExtractedAudioDto extractedAudio = provider.extract(videoName, videoId, cookies);
         return AudioExtractionResponse.success("Audio extraido correctamente.", extractedAudio);
     }

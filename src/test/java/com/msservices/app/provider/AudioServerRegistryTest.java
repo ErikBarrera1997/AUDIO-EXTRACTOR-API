@@ -38,6 +38,18 @@ class AudioServerRegistryTest {
     }
 
     @Test
+    @DisplayName("Aliases resolve to the matching provider")
+    void aliasesResolve() {
+        AudioServerProvider local = providerWithAliases("local", "Red Local", false,
+                List.of("local_network", "local-network", "red_local"));
+        AudioServerRegistry registry = new AudioServerRegistry(List.of(local));
+
+        assertSame(local, registry.resolve("local_network"));
+        assertSame(local, registry.resolve("LOCAL-NETWORK"));
+        assertSame(local, registry.resolve("red_local"));
+    }
+
+    @Test
     @DisplayName("An unknown server id fails with a client error")
     void unknownServerIsRejected() {
         AudioServerRegistry registry = new AudioServerRegistry(
@@ -47,20 +59,38 @@ class AudioServerRegistryTest {
     }
 
     @Test
-    @DisplayName("The available servers list marks the default and its capabilities")
+    @DisplayName("The available servers list marks the default and its capabilities without duplicating aliases")
     void listsServers() {
-        AudioServerRegistry registry = new AudioServerRegistry(List.of(
-                provider("youtube", "YouTube", true),
-                provider("archive", "Archive", false)));
+        AudioServerProvider youtube = provider("youtube", "YouTube", true);
+        AudioServerProvider local = providerWithAliases("local", "Red Local", false,
+                List.of("local_network", "local-network"));
+        AudioServerRegistry registry = new AudioServerRegistry(List.of(youtube, local));
 
         List<AudioServerInfo> servers = registry.availableServers();
 
         assertEquals(2, servers.size());
         assertEquals("youtube", servers.get(0).getId());
+        assertEquals("YouTube", servers.get(0).getDisplayName());
         assertTrue(servers.get(0).isDefaultServer());
         assertTrue(servers.get(0).isSupportsUserCookies());
-        assertEquals("archive", servers.get(1).getId());
+
+        assertEquals("local", servers.get(1).getId());
+        assertEquals("Red Local", servers.get(1).getDisplayName());
         assertFalse(servers.get(1).isDefaultServer());
+        assertFalse(servers.get(1).isSupportsUserCookies());
+    }
+
+    @Test
+    @DisplayName("Custom default server id can be configured")
+    void customDefaultServer() {
+        AudioServerProvider youtube = provider("youtube", "YouTube", true);
+        AudioServerProvider local = provider("local", "Red Local", false);
+        AudioServerRegistry registry = new AudioServerRegistry(List.of(youtube, local), "local");
+
+        assertSame(local, registry.defaultProvider());
+        assertSame(local, registry.resolve(null));
+        assertFalse(registry.availableServers().get(0).isDefaultServer());
+        assertTrue(registry.availableServers().get(1).isDefaultServer());
     }
 
     @Test
@@ -72,6 +102,11 @@ class AudioServerRegistryTest {
     }
 
     private AudioServerProvider provider(String id, String displayName, boolean supportsUserCookies) {
+        return providerWithAliases(id, displayName, supportsUserCookies, List.of());
+    }
+
+    private AudioServerProvider providerWithAliases(String id, String displayName, boolean supportsUserCookies,
+                                                   List<String> aliases) {
         return new AudioServerProvider() {
             @Override
             public String id() {
@@ -86,6 +121,11 @@ class AudioServerRegistryTest {
             @Override
             public boolean supportsUserCookies() {
                 return supportsUserCookies;
+            }
+
+            @Override
+            public List<String> aliases() {
+                return aliases;
             }
 
             @Override

@@ -410,6 +410,53 @@ class AudioExtractionServiceSecurityTest {
         verify(youtubeAudioRepository, never()).searchVideos(anyString());
     }
 
+    @Test
+    @DisplayName("Local server search does not require cookies or consent")
+    void localServerSearchDoesNotRequireCookies() {
+        when(dataApiSearchRepository.isAvailable()).thenReturn(false);
+        when(youtubeAudioRepository.searchVideos(anyString()))
+                .thenReturn(List.of(new AudioSearchResultDto("id1", "title", "author", 100L, 10L)));
+
+        AudioSearchResponse response = service.searchVideos("never gonna give you up", USER_COOKIES, null, "local");
+
+        assertTrue(response.isSuccess());
+        verify(youtubeAudioRepository).searchVideos("never gonna give you up");
+        verify(youtubeAudioRepository, never()).searchVideos(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("Local server extraction proceeds without cookies even if consent is missing")
+    void localServerExtractionIgnoresCookies() {
+        when(youtubeAudioRepository.extractAudioByVideoName(anyString(), any()))
+                .thenReturn(new ExtractedAudioDto("title", "audio.mp3", "audio/mpeg", "AAA="));
+
+        AudioExtractionRequest request = requestWithId("dQw4w9WgXcQ");
+        request.setServerId("local");
+        request.setCookies(USER_COOKIES);
+        request.setDataUsageConsent(null);
+
+        AudioExtractionResponse response = service.extractAudio(request);
+
+        assertTrue(response.isSuccess());
+        verify(youtubeAudioRepository).extractAudioByVideoName("valid video name", "dQw4w9WgXcQ");
+        verify(youtubeAudioRepository, never()).extractAudioByVideoName(anyString(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("Local network alias resolves and extracts without cookies")
+    void localNetworkAliasExtractsWithoutCookies() {
+        when(youtubeAudioRepository.extractAudioByVideoName(anyString(), any()))
+                .thenReturn(new ExtractedAudioDto("title", "audio.mp3", "audio/mpeg", "AAA="));
+
+        AudioExtractionRequest request = requestWithId("dQw4w9WgXcQ");
+        request.setServerId("local_network");
+
+        AudioExtractionResponse response = service.extractAudio(request);
+
+        assertTrue(response.isSuccess());
+        verify(youtubeAudioRepository).extractAudioByVideoName("valid video name", "dQw4w9WgXcQ");
+    }
+
     private AudioExtractionRequest requestWithId(String videoId) {
         AudioExtractionRequest request = new AudioExtractionRequest();
         request.setVideoName("  valid video name  ");

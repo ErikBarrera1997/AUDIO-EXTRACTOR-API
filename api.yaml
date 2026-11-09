@@ -4,7 +4,8 @@ info:
   description: >
     API REST para buscar videos en YouTube y extraer su audio en formato MP3
     (codificado en Base64). Usa yt-dlp y ffmpeg internamente.
-    Documentación detallada de clases y manejo de errores: ver docs/API.md.
+    Soporta múltiples proveedores de servidor (servidor YouTube para Render y servidor Red Local).
+    Documentación detallada de clases y manejo de errores: ver api.md.
   version: 0.0.1-SNAPSHOT
 servers:
   - url: http://localhost:8088
@@ -13,8 +14,28 @@ servers:
 tags:
   - name: Audios
     description: Búsqueda y extracción de audio desde YouTube.
+  - name: Servers
+    description: Proveedores de servidores de audio disponibles.
 
 paths:
+  /api/servers:
+    get:
+      tags: [Servers]
+      summary: Listar servidores de audio disponibles
+      description: >
+        Devuelve la lista de servidores de audio configurados en la aplicación
+        (por ejemplo, YouTube y Red Local), indicando el servidor por defecto y si soporta cookies.
+      operationId: listAudioServers
+      responses:
+        '200':
+          description: Lista de servidores de audio obtenida con éxito.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AudioServerInfo'
+
   /api/audios/search:
     post:
       tags: [Audios]
@@ -31,6 +52,7 @@ paths:
               $ref: '#/components/schemas/AudioExtractionRequest'
             example:
               videoName: "never gonna give you up"
+              serverId: "local"
       responses:
         '200':
           description: Búsqueda realizada con éxito.
@@ -63,6 +85,7 @@ paths:
             example:
               videoName: "never gonna give you up"
               videoId: "dQw4w9WgXcQ"
+              serverId: "local"
       responses:
         '200':
           description: Audio extraído con éxito.
@@ -81,6 +104,22 @@ paths:
 
 components:
   schemas:
+    AudioServerInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          example: "local"
+        displayName:
+          type: string
+          example: "Red Local"
+        supportsUserCookies:
+          type: boolean
+          example: false
+        defaultServer:
+          type: boolean
+          example: false
+
     AudioExtractionRequest:
       type: object
       required: [videoName]
@@ -101,6 +140,21 @@ components:
             se usa el primer resultado de la búsqueda por nombre.
             No se utiliza en /search.
           example: "dQw4w9WgXcQ"
+        serverId:
+          type: string
+          nullable: true
+          description: >
+            Identificador del servidor de audio (ej: 'youtube', 'local', 'local_network').
+            Por defecto 'youtube'.
+          example: "local"
+        cookies:
+          type: string
+          nullable: true
+          description: Contenido Netscape cookies.txt (solo para servidores que lo soporten).
+        dataUsageConsent:
+          type: boolean
+          nullable: true
+          description: Consentimiento para el uso de cookies.
 
     AudioSearchResultDto:
       type: object
